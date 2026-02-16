@@ -1,28 +1,43 @@
-// Initialisation Telegram WebApp
+// ================================================
+// STREAM WEBAPP - Version professionnelle
+// Telegram WebApp pour streams sportifs
+// ================================================
+
+// Initialisation Telegram
 const tg = window.Telegram.WebApp;
 tg.ready();
-tg.expand(); // La WebApp prend tout l'écran
-tg.enableClosingConfirmation(); // Demande confirmation avant fermeture
+tg.expand();
+tg.enableClosingConfirmation();
 
-// Configuration
+// ================================================
+// CONFIGURATION
+// ================================================
 const CONFIG = {
-    RETRY_DELAY: 3000, // 3 secondes avant rechargement
-    MAX_RETRIES: 3,
-    VIEWER_UPDATE_INTERVAL: 30000 // 30 secondes
+    RETRY_DELAY: 3000,           // 3 secondes avant rechargement
+    MAX_RETRIES: 3,               // Nombre maximum de tentatives
+    VIEWER_UPDATE_INTERVAL: 30000, // 30 secondes entre mises à jour viewers
+    PROXY_ENABLED: false,          // Activer/désactiver le proxy CORS
+    PROXY_URL: 'https://cors-anywhere.herokuapp.com/' // Proxy optionnel
 };
 
-// État de l'application
+// ================================================
+// ÉTAT DE L'APPLICATION
+// ================================================
 let state = {
     source: null,
     id: null,
     streamNo: 1,
     viewers: 0,
     retryCount: 0,
-    streams: [], // Pour stocker tous les flux disponibles
-    currentStream: null
+    streams: [],
+    currentStream: null,
+    embedUrl: null,
+    originalUrl: null
 };
 
-// Éléments DOM
+// ================================================
+// ÉLÉMENTS DOM
+// ================================================
 const elements = {
     loading: document.getElementById('loadingOverlay'),
     error: document.getElementById('errorOverlay'),
@@ -35,7 +50,13 @@ const elements = {
     totalStreams: document.getElementById('totalStreams')
 };
 
-// Récupérer les paramètres de l'URL
+// ================================================
+// UTILITAIRES
+// ================================================
+
+/**
+ * Récupère les paramètres de l'URL
+ */
 function getUrlParams() {
     const params = new URLSearchParams(window.location.search);
     return {
@@ -46,7 +67,9 @@ function getUrlParams() {
     };
 }
 
-// Valider les paramètres
+/**
+ * Valide les paramètres requis
+ */
 function validateParams(params) {
     if (!params.source || !params.id) {
         showError('Paramètres de stream invalides');
@@ -55,71 +78,276 @@ function validateParams(params) {
     return true;
 }
 
-// Initialiser l'application
-async function init() {
-    try {
-        // Récupérer et valider les paramètres
-        const params = getUrlParams();
-        if (!validateParams(params)) return;
-        
-        state.source = params.source;
-        state.id = params.id;
-        state.streamNo = params.streamNo;
-        state.viewers = params.viewers;
-        
-        // Mettre à jour le thème Telegram
-        updateTheme();
-        
-        // Charger les informations du stream
-        await loadStreamInfo();
-        
-        // Charger le flux
-        loadStream();
-        
-        // Écouter les changements de thème
-        tg.onEvent('themeChanged', updateTheme);
-        
-        // Démarrer la mise à jour des viewers
-        startViewerUpdates();
-        
-    } catch (error) {
-        console.error('Initialization error:', error);
-        showError('Erreur d\'initialisation');
-    }
-}
-
-// Mettre à jour le thème selon Telegram
+/**
+ * Met à jour le thème Telegram
+ */
 function updateTheme() {
     const theme = tg.themeParams;
     document.body.style.backgroundColor = theme.bg_color || '#ffffff';
     document.body.style.color = theme.text_color || '#000000';
+    
+    // Mettre à jour la couleur du bouton principal
+    const buttons = document.querySelectorAll('.btn-telegram');
+    buttons.forEach(btn => {
+        btn.style.backgroundColor = theme.button_color || '#40a7e3';
+        btn.style.color = theme.button_text_color || '#ffffff';
+    });
 }
 
-// Charger les informations du stream (optionnel - pour avoir tous les flux)
+/**
+ * Formate le nombre de viewers (ex: 1500 -> 1.5k)
+ */
+function formatViewers(count) {
+    if (count >= 1000000) {
+        return (count / 1000000).toFixed(1) + 'M';
+    }
+    if (count >= 1000) {
+        return (count / 1000).toFixed(1) + 'k';
+    }
+    return count.toString();
+}
+
+// ================================================
+// CONSTRUCTION DE L'URL D'EMBED
+// ================================================
+
+/**
+ * Détecte le type d'ID (numérique ou texte)
+ */
+function isNumericId(id) {
+    return /^\d+$/.test(id);
+}
+
+/**
+ * Extrait l'ID numérique d'une URL de type golf/19813
+ */
+function extractNumericId(id) {
+    const match = id.match(/\d+/);
+    return match ? match[0] : id;
+}
+
+/**
+ * Construit l'URL d'embed selon la source
+ */
+function buildEmbedUrl(source, id, streamNo) {
+    // Sauvegarder l'URL originale pour référence
+    const originalUrl = `https://embedsports.top/embed/${source}/${id}/${streamNo}`;
+    state.originalUrl = originalUrl;
+    
+    // Détection automatique du type de source
+    const numericId = isNumericId(id) ? id : extractNumericId(id);
+    
+    // CAS 1: Source "golf" ou ID numérique (format embedhd.org)
+    if (source === 'golf' || isNumericId(id)) {
+        console.log(`🎯 Détection: source numérique (${source}, ID: ${id})`);
+        return `https://embedhd.org/source/streamed.php?hd=118&id=${numericId}&no=${streamNo}`;
+    }
+    
+    // CAS 2: Source "echo" avec ID texte (cricket, football...)
+    if (source === 'echo' && !isNumericId(id)) {
+        console.log(`🎯 Détection: source echo texte (${id})`);
+        
+        // Vérifier si l'ID contient des mots-clés spécifiques
+        if (id.includes('cricket') || id.includes('world-cup')) {
+            // Format cricket: on garde l'URL originale mais on peut ajouter des paramètres
+            return originalUrl;
+        }
+    }
+    
+    // CAS 3: Autres sources (alpha, bravo, etc.)
+    console.log(`🎯 Détection: source standard (${source})`);
+    
+    // Par défaut, on tente l'URL originale
+    return originalUrl;
+}
+
+// ================================================
+// GESTION DE L'IFRAME
+// ================================================
+
+/**
+ * Crée et configure l'iframe avec les attributs optimaux
+ */
+function configureIframe(embedUrl) {
+    const iframe = elements.iframe;
+    
+    // Attributs de base (basés sur l'exemple qui fonctionne)
+    iframe.title = "Stream Player";
+    iframe.setAttribute('marginheight', "0");
+    iframe.setAttribute('marginwidth', "0");
+    iframe.src = embedUrl;
+    iframe.scrolling = "no";
+    iframe.allowfullscreen = "yes";
+    iframe.allow = "encrypted-media; picture-in-picture; fullscreen";
+    iframe.width = "100%";
+    iframe.height = "100%";
+    iframe.frameborder = "0";
+    iframe.style.border = "none";
+    
+    // Attributs de sécurité (optimisés pour embedsports)
+    iframe.sandbox = "allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-presentation allow-top-navigation";
+    iframe.referrerpolicy = "no-referrer-when-downgrade";
+    iframe.loading = "lazy";
+    
+    // Gestionnaires d'événements
+    iframe.onload = handleIframeLoad;
+    iframe.onerror = handleIframeError;
+    
+    return iframe;
+}
+
+/**
+ * Gestionnaire de chargement réussi
+ */
+function handleIframeLoad() {
+    console.log('✅ Iframe chargé avec succès');
+    elements.loading.classList.add('hidden');
+    elements.iframe.classList.remove('hidden');
+    state.retryCount = 0;
+    
+    // Notifier Telegram
+    tg.sendData(JSON.stringify({
+        action: 'stream_started',
+        streamNo: state.streamNo,
+        viewers: state.viewers,
+        url: state.embedUrl
+    }));
+    
+    // Analyser le contenu de l'iframe pour détection avancée
+    try {
+        setTimeout(() => {
+            const iframeDoc = elements.iframe.contentDocument || elements.iframe.contentWindow.document;
+            if (iframeDoc.body.innerHTML.includes('embedhd.org')) {
+                console.log('🔄 Détection: redirection interne vers embedhd.org');
+                // Si l'iframe contient une autre iframe, on pourrait la remonter
+            }
+        }, 2000);
+    } catch (e) {
+        // Cross-origin, pas d'accès
+    }
+}
+
+/**
+ * Gestionnaire d'erreur de chargement
+ */
+function handleIframeError() {
+    console.error('❌ Erreur de chargement iframe');
+    handleStreamError();
+}
+
+// ================================================
+// GESTION DES ERREURS
+// ================================================
+
+/**
+ * Affiche un message d'erreur
+ */
+function showError(message) {
+    elements.errorMessage.textContent = message;
+    elements.loading.classList.add('hidden');
+    elements.iframe.classList.add('hidden');
+    elements.error.classList.remove('hidden');
+}
+
+/**
+ * Gère les erreurs de stream avec retry automatique
+ */
+function handleStreamError() {
+    state.retryCount++;
+    
+    if (state.retryCount <= CONFIG.MAX_RETRIES) {
+        console.log(`🔄 Tentative ${state.retryCount}/${CONFIG.MAX_RETRIES}...`);
+        
+        // Stratégie de retry avec backoff exponentiel
+        const delay = CONFIG.RETRY_DELAY * Math.pow(2, state.retryCount - 1);
+        
+        elements.loading.querySelector('p').textContent = 
+            `Tentative ${state.retryCount}/${CONFIG.MAX_RETRIES}...`;
+        
+        setTimeout(() => {
+            loadStream();
+        }, delay);
+    } else {
+        showError('Le flux n\'est pas disponible. Veuillez réessayer plus tard.');
+    }
+}
+
+/**
+ * Réessaie le chargement
+ */
+function retryLoad() {
+    state.retryCount = 0;
+    elements.error.classList.add('hidden');
+    loadStream();
+}
+
+// ================================================
+// GESTION DES FLUX
+// ================================================
+
+/**
+ * Charge le stream principal
+ */
+function loadStream() {
+    // Construire l'URL d'embed
+    state.embedUrl = buildEmbedUrl(state.source, state.id, state.streamNo);
+    console.log('📺 Chargement stream:', state.embedUrl);
+    
+    // Cacher l'erreur, montrer le loading
+    elements.error.classList.add('hidden');
+    elements.loading.classList.remove('hidden');
+    elements.iframe.classList.add('hidden');
+    
+    // Configurer l'iframe
+    configureIframe(state.embedUrl);
+}
+
+/**
+ * Charge les informations des flux disponibles (simulé)
+ * Dans une version future, on pourrait appeler une API
+ */
 async function loadStreamInfo() {
     try {
-        // Ici tu pourrais appeler une API pour récupérer tous les flux disponibles
-        // Pour l'instant, on simule avec les paramètres
-        const mockStreams = [
-            { streamNo: 1, hd: true, language: 'Français' },
-            { streamNo: 2, hd: false, language: 'English' },
-            { streamNo: 3, hd: true, language: 'Español' }
-        ];
+        // Simulation de flux multiples basée sur la source
+        const mockStreams = [];
+        
+        if (state.source === 'echo') {
+            mockStreams.push(
+                { streamNo: 1, hd: true, language: 'Français' },
+                { streamNo: 2, hd: false, language: 'English' },
+                { streamNo: 3, hd: true, language: 'Español' }
+            );
+        } else if (state.source === 'golf' || isNumericId(state.id)) {
+            mockStreams.push(
+                { streamNo: 1, hd: true, language: 'English' },
+                { streamNo: 2, hd: true, language: 'Spanish' }
+            );
+        } else {
+            mockStreams.push(
+                { streamNo: 1, hd: true, language: 'Default' }
+            );
+        }
         
         state.streams = mockStreams;
         updateStreamSelector();
         
     } catch (error) {
-        console.warn('Could not load stream info:', error);
+        console.warn('⚠️ Impossible de charger les infos flux:', error);
     }
 }
 
-// Mettre à jour le sélecteur de flux
+/**
+ * Met à jour le sélecteur de flux
+ */
 function updateStreamSelector() {
-    if (state.streams.length <= 1) return;
+    if (state.streams.length <= 1) {
+        elements.streamSelector.classList.add('hidden');
+        return;
+    }
     
     elements.streamSelector.classList.remove('hidden');
     elements.totalStreams.textContent = state.streams.length;
+    elements.currentStreamNo.textContent = state.streamNo;
     
     // Vider la liste
     elements.streamList.innerHTML = '';
@@ -144,113 +372,66 @@ function updateStreamSelector() {
         li.appendChild(a);
         elements.streamList.appendChild(li);
     });
-}
-
-// Changer de flux
-function switchStream(streamNo) {
-    if (streamNo === state.streamNo) return;
     
-    state.streamNo = streamNo;
-    elements.currentStreamNo.textContent = streamNo;
-    
-    // Recharger le flux
-    loadStream();
-}
-
-// Construire l'URL d'embed
-function buildEmbedUrl() {
-    // Format basé sur ton exemple : https://embedsports.top/embed/[source]/[id]/[streamNo]
-    return `https://embedsports.top/embed/${state.source}/${state.id}/${state.streamNo}`;
-}
-
-// Charger le stream
-function loadStream() {
-    // Cacher l'erreur, montrer le loading
-    elements.error.classList.add('hidden');
-    elements.loading.classList.remove('hidden');
-    elements.iframe.classList.add('hidden');
-    
-    // Construire l'URL
-    const embedUrl = buildEmbedUrl();
-    
-    // Configurer l'iframe
-    elements.iframe.src = embedUrl;
-    
-    // Gérer le chargement de l'iframe
-    elements.iframe.onload = () => {
-        elements.loading.classList.add('hidden');
-        elements.iframe.classList.remove('hidden');
-        state.retryCount = 0; // Reset retry count on success
-        
-        // Envoyer un événement à Telegram
-        tg.sendData(JSON.stringify({
-            action: 'stream_started',
-            streamNo: state.streamNo,
-            viewers: state.viewers
-        }));
-    };
-    
-    // Gérer les erreurs de l'iframe
-    elements.iframe.onerror = () => {
-        handleStreamError();
-    };
-}
-
-// Gérer les erreurs de stream
-function handleStreamError() {
-    state.retryCount++;
-    
-    if (state.retryCount <= CONFIG.MAX_RETRIES) {
-        // Réessayer automatiquement
-        setTimeout(() => {
-            loadStream();
-        }, CONFIG.RETRY_DELAY);
-    } else {
-        // Afficher l'erreur
-        showError('Le flux n\'est pas disponible. Veuillez réessayer plus tard.');
+    // Initialiser le dropdown Bootstrap
+    if (window.bootstrap) {
+        new bootstrap.Dropdown(document.querySelector('.dropdown-toggle'));
     }
 }
 
-// Afficher une erreur
-function showError(message) {
-    elements.errorMessage.textContent = message;
-    elements.loading.classList.add('hidden');
-    elements.iframe.classList.add('hidden');
-    elements.error.classList.remove('hidden');
+/**
+ * Change de flux
+ */
+function switchStream(streamNo) {
+    if (streamNo === state.streamNo) return;
+    
+    console.log(`🔄 Changement vers flux ${streamNo}`);
+    state.streamNo = streamNo;
+    elements.currentStreamNo.textContent = streamNo;
+    
+    // Mettre à jour l'URL
+    state.embedUrl = buildEmbedUrl(state.source, state.id, state.streamNo);
+    
+    // Recharger l'iframe
+    elements.iframe.src = state.embedUrl;
+    
+    // Notifier Telegram
+    tg.sendData(JSON.stringify({
+        action: 'stream_changed',
+        streamNo: streamNo,
+        url: state.embedUrl
+    }));
 }
 
-// Réessayer le chargement
-function retryLoad() {
-    state.retryCount = 0;
-    loadStream();
-}
+// ================================================
+// GESTION DES VIEWERS
+// ================================================
 
-// Mettre à jour le compteur de viewers
+/**
+ * Met à jour le compteur de viewers
+ */
 function updateViewerCount(viewers) {
     if (viewers !== undefined) {
         state.viewers = viewers;
     }
     
-    // Formater le nombre
-    const formatted = state.viewers >= 1000 
-        ? (state.viewers / 1000).toFixed(1) + 'k'
-        : state.viewers.toString();
-    
-    elements.viewerCount.textContent = formatted;
+    elements.viewerCount.textContent = formatViewers(state.viewers);
 }
 
-// Démarrer les mises à jour des viewers (simulation)
+/**
+ * Simule des mises à jour de viewers
+ * Dans la vraie vie, remplacer par WebSocket ou API polling
+ */
 function startViewerUpdates() {
     updateViewerCount();
     
-    // Simuler des mises à jour (dans la vraie vie, tu utiliserais WebSocket ou polling API)
     setInterval(() => {
-        // Variation aléatoire pour la démo
-        const variation = Math.floor(Math.random() * 10) - 5;
+        // Variation aléatoire réaliste
+        const variation = Math.floor(Math.random() * 20) - 10;
         state.viewers = Math.max(0, state.viewers + variation);
         updateViewerCount();
         
-        // Optionnel: envoyer les viewers à Telegram
+        // Notifier Telegram
         tg.sendData(JSON.stringify({
             action: 'viewers_update',
             viewers: state.viewers
@@ -258,7 +439,13 @@ function startViewerUpdates() {
     }, CONFIG.VIEWER_UPDATE_INTERVAL);
 }
 
-// Mode plein écran
+// ================================================
+// CONTRÔLES D'INTERFACE
+// ================================================
+
+/**
+ * Bascule en plein écran
+ */
 function toggleFullscreen() {
     if (!document.fullscreenElement) {
         document.documentElement.requestFullscreen();
@@ -269,16 +456,112 @@ function toggleFullscreen() {
     }
 }
 
-// Fermer la WebApp
+/**
+ * Ferme la WebApp
+ */
 function closeWebApp() {
     tg.close();
 }
 
-// Empêcher le copier-coller
-document.addEventListener('copy', (e) => e.preventDefault());
-document.addEventListener('cut', (e) => e.preventDefault());
-document.addEventListener('paste', (e) => e.preventDefault());
-document.addEventListener('contextmenu', (e) => e.preventDefault());
+// ================================================
+// SÉCURITÉ
+// ================================================
 
-// Démarrer l'application
-document.addEventListener('DOMContentLoaded', init);
+/**
+ * Empêche les actions de copie
+ */
+function preventCopy() {
+    document.addEventListener('copy', (e) => e.preventDefault());
+    document.addEventListener('cut', (e) => e.preventDefault());
+    document.addEventListener('paste', (e) => e.preventDefault());
+    document.addEventListener('contextmenu', (e) => e.preventDefault());
+    
+    // Empêcher la sélection de texte
+    document.addEventListener('selectstart', (e) => e.preventDefault());
+    
+    // Désactiver le drag & drop
+    document.addEventListener('dragstart', (e) => e.preventDefault());
+}
+
+/**
+ * Nettoie l'URL des paramètres sensibles
+ */
+function cleanUrl() {
+    if (window.history.replaceState) {
+        const cleanUrl = window.location.protocol + "//" + 
+                        window.location.host + 
+                        window.location.pathname;
+        window.history.replaceState({}, document.title, cleanUrl);
+    }
+}
+
+// ================================================
+// INITIALISATION
+// ================================================
+
+/**
+ * Initialise l'application
+ */
+async function init() {
+    try {
+        console.log('🚀 Initialisation de Stream WebApp');
+        
+        // Récupérer et valider les paramètres
+        const params = getUrlParams();
+        if (!validateParams(params)) return;
+        
+        state.source = params.source;
+        state.id = params.id;
+        state.streamNo = params.streamNo;
+        state.viewers = params.viewers;
+        
+        console.log('📋 Paramètres:', state);
+        
+        // Appliquer le thème Telegram
+        updateTheme();
+        
+        // Sécurité
+        preventCopy();
+        cleanUrl();
+        
+        // Charger les infos des flux
+        await loadStreamInfo();
+        
+        // Charger le stream
+        loadStream();
+        
+        // Démarrer les mises à jour
+        startViewerUpdates();
+        
+        // Écouter les changements de thème
+        tg.onEvent('themeChanged', updateTheme);
+        
+        // Notifier Telegram que la WebApp est prête
+        tg.sendData(JSON.stringify({
+            action: 'webapp_ready',
+            source: state.source,
+            id: state.id
+        }));
+        
+    } catch (error) {
+        console.error('💥 Erreur d\'initialisation:', error);
+        showError('Erreur d\'initialisation: ' + error.message);
+    }
+}
+
+// ================================================
+// DÉMARRAGE
+// ================================================
+
+// Attendre que le DOM soit chargé
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+} else {
+    init();
+}
+
+// Exposer les fonctions globales nécessaires
+window.toggleFullscreen = toggleFullscreen;
+window.closeWebApp = closeWebApp;
+window.retryLoad = retryLoad;
+window.switchStream = switchStream;
