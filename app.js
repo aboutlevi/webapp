@@ -555,6 +555,7 @@ async function init() {
 
 // Attendre que le DOM soit chargé
 if (document.readyState === 'loading') {
+    
     document.addEventListener('DOMContentLoaded', init);
 } else {
     init();
